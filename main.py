@@ -52,6 +52,7 @@ from datetime import datetime, timedelta
 from astrbot.api import AstrBotConfig, logger
 from astrbot.api.event import AstrMessageEvent, filter
 from astrbot.api.star import Context, Star
+from astrbot.api.web import error_response, json_response, request
 
 try:
     # 插件以 data.plugins.<目录名>.main 包形式被导入（AstrBot 标准方式）
@@ -66,6 +67,7 @@ except ImportError:  # 兜底：平铺目录导入
     from storage import LurkerStorage, new_member_record
 
 PLUGIN_VERSION = "v1.0.3"
+PLUGIN_NAME = "astrbot_plugin_lurker_watcher"
 
 DAY_SECONDS = 86400
 
@@ -156,6 +158,57 @@ class LurkerWatcherPlugin(Star):
         self._bg_tasks: list = []          # 后台任务句柄（自动初始化等）
         self._pending_group_inits: set = set()  # 待初始化群去重
         self._llm_warned = False           # LLM 不可用时只提示一次
+        context.register_web_api(f"/{PLUGIN_NAME}/dashboard", self.page_dashboard, ["GET"], "Lurker dashboard data")
+        context.register_web_api(f"/{PLUGIN_NAME}/groups/<group_id>", self.page_group, ["GET"], "Lurker group details")
+        context.register_web_api(f"/{PLUGIN_NAME}/groups/<group_id>/whitelist", self.page_whitelist, ["POST"], "Update group whitelist")
+
+    async def page_dashboard(self):
+        """Return a compact, read-only overview for the Plugin Page."""
+        if self.storage is None or self.cfg is None:
+            return error_response("Plugin is still initializing", status_code=503)
+        now = time.time()
+        groups = []
+        for gid, info in self.storage.list_groups().items():
+            members = self.storage.get_members(gid)
+            threshold = max(1, int(self.cfg.get_group("threshold_days", gid)))
+            warning = max(0, min(int(self.cfg.get_group("warning_days", gid)), threshold - 1))
+            warning_count = overdue_count = 0
+            for rec in members.values():
+                days = max(0.0, (now - float(rec.get("last_message_time") or now)) / DAY_SECONDS)
+                if days >= threshold:
+                    overdue_count += 1
+                elif days >= threshold - warning:
+                    warning_count += 1
+            groups.append({"id": gid, "name": info.get("group_name") or gid, "members": len(members), "warning_count": warning_count, "overdue_count": overdue_count, "threshold": threshold, "monitored": self._is_monitored(gid)})
+        return json_response({"version": PLUGIN_VERSION, "groups": groups, "group_count": len(groups), "updated_at": int(now)})
+
+    async def page_group(self, group_id: str):
+        """Return one group's effective settings and idle-member ranking."""
+        if self.storage is None or self.cfg is None:
+            return error_response("Plugin is still initializing", status_code=503)
+        gid = str(group_id)
+        if not self.storage.has_group(gid):
+            return error_response("Group is not monitored", status_code=404)
+        now = time.time()
+        whitelist = self.cfg.get_whitelist(gid)
+        members = []
+        for uid, rec in self.storage.get_members(gid).items():
+            days = max(0.0, (now - float(rec.get("last_message_time") or now)) / DAY_SECONDS)
+            members.append({"id": uid, "name": rec.get("username") or uid, "role": rec.get("role") or "member", "idle_days": round(days, 1), "whitelisted": uid in whitelist})
+        members.sort(key=lambda item: item["idle_days"], reverse=True)
+        return json_response({"id": gid, "name": self.storage.get_group_name(gid) or gid, "members": members, "group_whitelist": self.storage.get_group_config(gid).get("whitelist", []), "settings": {key: self.cfg.get_group(key, gid) for key in ("threshold_days", "warning_days", "enable_llm_decision", "warn_before_kick", "max_warns_per_round", "max_kick_evals_per_round")}})
+
+    async def page_whitelist(self, group_id: str):
+        """Replace the group-local whitelist. Dashboard auth is enforced upstream."""
+        if self.storage is None or not self.storage.has_group(group_id):
+            return error_response("Group is not monitored", status_code=404)
+        payload = await request.json(default={})
+        users = payload.get("users", []) if isinstance(payload, dict) else []
+        if not isinstance(users, list) or any(not str(uid).strip().isdigit() for uid in users):
+            return error_response("users must be a list of numeric QQ IDs", status_code=400)
+        cleaned = list(dict.fromkeys(str(uid).strip() for uid in users))
+        await self.storage.set_group_config(group_id, "whitelist", cleaned)
+        return json_response({"saved": True, "users": cleaned})
 
     # ==================================================================
     # 生命周期

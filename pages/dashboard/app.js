@@ -1,0 +1,15 @@
+const bridge = window.AstrBotPluginPage;
+const state = { selected: null, groups: [] };
+const $ = (id) => document.getElementById(id);
+const text = (value) => String(value ?? "");
+
+function setStatus(message, bad = false) { const node = $("status"); node.textContent = message; node.classList.toggle("error", bad); }
+function escapeHtml(value) { const box = document.createElement("span"); box.textContent = text(value); return box.innerHTML; }
+function renderGroups() { $("groups").innerHTML = state.groups.map((group) => `<button class="group ${group.id === state.selected ? "active" : ""}" data-id="${group.id}"><strong>${escapeHtml(group.name)}</strong><span>${group.members} 人${group.warning_count ? ` · 预警 ${group.warning_count}` : ""}${group.overdue_count ? ` · 超限 ${group.overdue_count}` : ""}</span></button>`).join("") || '<p class="empty">暂无已初始化的群</p>'; document.querySelectorAll(".group").forEach((node) => node.onclick = () => selectGroup(node.dataset.id)); }
+function renderSummary(data) { const warnings = data.groups.reduce((sum, group) => sum + group.warning_count, 0); const overdue = data.groups.reduce((sum, group) => sum + group.overdue_count, 0); $("summary").innerHTML = [["已纳管群", data.group_count], ["预警成员", warnings], ["超限待评估", overdue]].map(([label, value]) => `<div><span>${label}</span><b>${value}</b></div>`).join(""); }
+async function load() { try { const data = await bridge.apiGet("dashboard"); state.groups = data.groups || []; renderSummary(data); renderGroups(); setStatus(`数据已刷新 · ${new Date((data.updated_at || 0) * 1000).toLocaleString()}`); if (state.selected && state.groups.some((group) => group.id === state.selected)) await selectGroup(state.selected); } catch (error) { setStatus(`读取失败：${error.message || error}`, true); } }
+async function selectGroup(id) { state.selected = id; renderGroups(); try { const group = await bridge.apiGet(`groups/${id}`); $("empty").hidden = true; $("detail").hidden = false; $("group-name").textContent = group.name; $("settings").innerHTML = Object.entries(group.settings).map(([key, value]) => `<div><span>${key.replaceAll("_", " ")}</span><b>${typeof value === "boolean" ? (value ? "开启" : "关闭") : escapeHtml(value)}</b></div>`).join(""); $("members").innerHTML = group.members.map((member) => `<tr><td>${escapeHtml(member.name)}<small>${member.id}</small></td><td>${escapeHtml(member.role)}</td><td>${member.idle_days} 天</td><td><input class="whitelist" type="checkbox" value="${member.id}" ${member.whitelisted ? "checked" : ""} /></td></tr>`).join(""); $("save").hidden = false; } catch (error) { setStatus(`群数据读取失败：${error.message || error}`, true); } }
+$("refresh").onclick = load;
+$("save").onclick = async () => { try { const users = [...document.querySelectorAll(".whitelist:checked")].map((node) => node.value); await bridge.apiPost(`groups/${state.selected}/whitelist`, { users }); setStatus("群级白名单已保存"); await selectGroup(state.selected); } catch (error) { setStatus(`保存失败：${error.message || error}`, true); } };
+await bridge.ready();
+load();

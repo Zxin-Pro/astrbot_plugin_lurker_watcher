@@ -1,0 +1,18 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>潜水监测面板</title>
+    <link rel="stylesheet" href="./style.css" />
+  </head>
+  <body>
+    <main>
+      <header><div><p class="eyebrow">LURKER WATCHER</p><h1>潜水监测面板</h1></div><button id="refresh" title="刷新数据">刷新</button></header>
+      <p id="status" class="status">正在读取监测数据...</p>
+      <section id="summary" class="summary"></section>
+      <section class="layout"><aside><h2>受监控群</h2><div id="groups" class="groups"></div></aside><article><div id="empty" class="empty">选择一个群查看成员状态</div><div id="detail" hidden><div class="detail-head"><div><p class="eyebrow">GROUP STATUS</p><h2 id="group-name"></h2></div><button id="save" hidden>保存白名单</button></div><div id="settings" class="settings"></div><h3>潜水成员排行</h3><div class="table-wrap"><table><thead><tr><th>成员</th><th>身份</th><th>潜水</th><th>白名单</th></tr></thead><tbody id="members"></tbody></table></div></div></article></section>
+    </main>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
